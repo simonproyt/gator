@@ -135,23 +135,13 @@ func handlerUsers(s *state, cmd command) error {
 	return nil
 }
 
-func handlerAddFeed(s *state, cmd command) error {
+func handlerAddFeed(s *state, cmd command, user database.User) error {
 	if len(cmd.args) < 2 {
 		return fmt.Errorf("name and url required")
 	}
 	name := cmd.args[0]
 	url := cmd.args[1]
-	if s.cfg.CurrentUserName == "" {
-		return fmt.Errorf("no current user set")
-	}
 	ctx := context.Background()
-	user, err := s.db.GetUser(ctx, s.cfg.CurrentUserName)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return fmt.Errorf("current user does not exist")
-		}
-		return err
-	}
 	now := time.Now().UTC()
 	feed, err := s.db.CreateFeed(ctx, database.CreateFeedParams{
 		ID:        uuid.New(),
@@ -179,6 +169,23 @@ func handlerAddFeed(s *state, cmd command) error {
 	return nil
 }
 
+func middlewareLoggedIn(handler func(s *state, cmd command, user database.User) error) func(*state, command) error {
+	return func(s *state, cmd command) error {
+		if s.cfg.CurrentUserName == "" {
+			return fmt.Errorf("no current user set")
+		}
+		ctx := context.Background()
+		user, err := s.db.GetUser(ctx, s.cfg.CurrentUserName)
+		if err != nil {
+			if err == sql.ErrNoRows {
+				return fmt.Errorf("current user does not exist")
+			}
+			return err
+		}
+		return handler(s, cmd, user)
+	}
+}
+
 func handlerFeedsList(s *state, cmd command) error {
 	ctx := context.Background()
 	rows, err := s.db.GetFeeds(ctx)
@@ -195,22 +202,12 @@ func handlerFeedsList(s *state, cmd command) error {
 	return nil
 }
 
-func handlerFollow(s *state, cmd command) error {
+func handlerFollow(s *state, cmd command, user database.User) error {
 	if len(cmd.args) == 0 {
 		return fmt.Errorf("url required")
 	}
 	url := cmd.args[0]
-	if s.cfg.CurrentUserName == "" {
-		return fmt.Errorf("no current user set")
-	}
 	ctx := context.Background()
-	user, err := s.db.GetUser(ctx, s.cfg.CurrentUserName)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return fmt.Errorf("current user does not exist")
-		}
-		return err
-	}
 	feed, err := s.db.GetFeedByURLForFollow(ctx, url)
 	if err != nil {
 		return err
@@ -230,15 +227,8 @@ func handlerFollow(s *state, cmd command) error {
 	return nil
 }
 
-func handlerFollowing(s *state, cmd command) error {
-	if s.cfg.CurrentUserName == "" {
-		return fmt.Errorf("no current user set")
-	}
+func handlerFollowing(s *state, cmd command, user database.User) error {
 	ctx := context.Background()
-	user, err := s.db.GetUser(ctx, s.cfg.CurrentUserName)
-	if err != nil {
-		return err
-	}
 	rows, err := s.db.GetFeedFollowsForUser(ctx, user.ID)
 	if err != nil {
 		return err
@@ -316,10 +306,10 @@ func main() {
 	cmds.register("reset", handlerReset)
 	cmds.register("users", handlerUsers)
 	cmds.register("agg", handlerAgg)
-	cmds.register("addfeed", handlerAddFeed)
+	cmds.register("addfeed", middlewareLoggedIn(handlerAddFeed))
 	cmds.register("feeds", handlerFeedsList)
-	cmds.register("follow", handlerFollow)
-	cmds.register("following", handlerFollowing)
+	cmds.register("follow", middlewareLoggedIn(handlerFollow))
+	cmds.register("following", middlewareLoggedIn(handlerFollowing))
 
 	if len(os.Args) < 2 {
 		fmt.Fprintln(os.Stderr, "not enough arguments were provided")
