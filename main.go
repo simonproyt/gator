@@ -164,7 +164,88 @@ func handlerAddFeed(s *state, cmd command) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("%+v\n", feed)
+	// automatically follow the feed for the creator
+	followRow, err := s.db.CreateFeedFollow(ctx, database.CreateFeedFollowParams{
+		ID:        uuid.New(),
+		CreatedAt: now,
+		UpdatedAt: now,
+		UserID:    user.ID,
+		FeedID:    feed.ID,
+	})
+	if err != nil {
+		return err
+	}
+	fmt.Printf("%s %s\n", followRow.FeedName, followRow.UserName)
+	return nil
+}
+
+func handlerFeedsList(s *state, cmd command) error {
+	ctx := context.Background()
+	rows, err := s.db.GetFeeds(ctx)
+	if err != nil {
+		return err
+	}
+	for _, r := range rows {
+		owner := ""
+		if r.OwnerName.Valid {
+			owner = r.OwnerName.String
+		}
+		fmt.Printf("* %s (%s) - %s\n", r.Name, r.Url, owner)
+	}
+	return nil
+}
+
+func handlerFollow(s *state, cmd command) error {
+	if len(cmd.args) == 0 {
+		return fmt.Errorf("url required")
+	}
+	url := cmd.args[0]
+	if s.cfg.CurrentUserName == "" {
+		return fmt.Errorf("no current user set")
+	}
+	ctx := context.Background()
+	user, err := s.db.GetUser(ctx, s.cfg.CurrentUserName)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return fmt.Errorf("current user does not exist")
+		}
+		return err
+	}
+	feed, err := s.db.GetFeedByURLForFollow(ctx, url)
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	row, err := s.db.CreateFeedFollow(ctx, database.CreateFeedFollowParams{
+		ID:        uuid.New(),
+		CreatedAt: now,
+		UpdatedAt: now,
+		UserID:    user.ID,
+		FeedID:    feed.ID,
+	})
+	if err != nil {
+		return err
+	}
+	fmt.Printf("%s %s\n", row.FeedName, row.UserName)
+	return nil
+}
+
+func handlerFollowing(s *state, cmd command) error {
+	if s.cfg.CurrentUserName == "" {
+		return fmt.Errorf("no current user set")
+	}
+	ctx := context.Background()
+	user, err := s.db.GetUser(ctx, s.cfg.CurrentUserName)
+	if err != nil {
+		return err
+	}
+	rows, err := s.db.GetFeedFollowsForUser(ctx, user.ID)
+	if err != nil {
+		return err
+	}
+	for _, r := range rows {
+		fmt.Printf("* %s\n", r.FeedName)
+	}
 	return nil
 }
 
@@ -236,6 +317,9 @@ func main() {
 	cmds.register("users", handlerUsers)
 	cmds.register("agg", handlerAgg)
 	cmds.register("addfeed", handlerAddFeed)
+	cmds.register("feeds", handlerFeedsList)
+	cmds.register("follow", handlerFollow)
+	cmds.register("following", handlerFollowing)
 
 	if len(os.Args) < 2 {
 		fmt.Fprintln(os.Stderr, "not enough arguments were provided")
