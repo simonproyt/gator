@@ -135,6 +135,39 @@ func handlerUsers(s *state, cmd command) error {
 	return nil
 }
 
+func handlerAddFeed(s *state, cmd command) error {
+	if len(cmd.args) < 2 {
+		return fmt.Errorf("name and url required")
+	}
+	name := cmd.args[0]
+	url := cmd.args[1]
+	if s.cfg.CurrentUserName == "" {
+		return fmt.Errorf("no current user set")
+	}
+	ctx := context.Background()
+	user, err := s.db.GetUser(ctx, s.cfg.CurrentUserName)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return fmt.Errorf("current user does not exist")
+		}
+		return err
+	}
+	now := time.Now().UTC()
+	feed, err := s.db.CreateFeed(ctx, database.CreateFeedParams{
+		ID:        uuid.New(),
+		CreatedAt: now,
+		UpdatedAt: now,
+		Name:      name,
+		Url:       url,
+		UserID:    uuid.NullUUID{UUID: user.ID, Valid: true},
+	})
+	if err != nil {
+		return err
+	}
+	fmt.Printf("%+v\n", feed)
+	return nil
+}
+
 func fetchFeed(ctx context.Context, feedURL string) (*RSSFeed, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", feedURL, nil)
 	if err != nil {
@@ -202,6 +235,7 @@ func main() {
 	cmds.register("reset", handlerReset)
 	cmds.register("users", handlerUsers)
 	cmds.register("agg", handlerAgg)
+	cmds.register("addfeed", handlerAddFeed)
 
 	if len(os.Args) < 2 {
 		fmt.Fprintln(os.Stderr, "not enough arguments were provided")
