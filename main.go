@@ -227,6 +227,23 @@ func handlerFollow(s *state, cmd command, user database.User) error {
 	return nil
 }
 
+func handlerUnfollow(s *state, cmd command, user database.User) error {
+	if len(cmd.args) == 0 {
+		return fmt.Errorf("url required")
+	}
+	url := cmd.args[0]
+	ctx := context.Background()
+	feed, err := s.db.GetFeedByURLForFollow(ctx, url)
+	if err != nil {
+		return err
+	}
+	if err := s.db.DeleteFeedFollow(ctx, database.DeleteFeedFollowParams{UserID: user.ID, FeedID: feed.ID}); err != nil {
+		return err
+	}
+	fmt.Printf("unfollowed %s %s\n", feed.Name, user.Name)
+	return nil
+}
+
 func handlerFollowing(s *state, cmd command, user database.User) error {
 	ctx := context.Background()
 	rows, err := s.db.GetFeedFollowsForUser(ctx, user.ID)
@@ -310,6 +327,7 @@ func main() {
 	cmds.register("feeds", handlerFeedsList)
 	cmds.register("follow", middlewareLoggedIn(handlerFollow))
 	cmds.register("following", middlewareLoggedIn(handlerFollowing))
+	cmds.register("unfollow", middlewareLoggedIn(handlerUnfollow))
 
 	if len(os.Args) < 2 {
 		fmt.Fprintln(os.Stderr, "not enough arguments were provided")

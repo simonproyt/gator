@@ -17,5 +17,8 @@ JOIN feeds f ON ff.feed_id = f.id
 WHERE ff.user_id = $1
 ORDER BY f.name;
 
+-- name: DeleteFeedFollow :exec
+DELETE FROM feed_follows WHERE user_id = $1 AND feed_id = $2;
+
 -- name: GetFeedByURLForFollow :one
 SELECT id, created_at, updated_at, name, url, user_id FROM feeds WHERE url = $1;
