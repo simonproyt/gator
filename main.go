@@ -72,9 +72,13 @@ func handlerRegister(s *state, cmd command) error {
 		return err
 	}
 
-	id := uuid.New()
 	now := time.Now().UTC()
-	user, err := s.db.CreateUser(ctx, id, now, now, name)
+	user, err := s.db.CreateUser(ctx, database.CreateUserParams{
+		ID:        uuid.New(),
+		CreatedAt: now,
+		UpdatedAt: now,
+		Name:      name,
+	})
 	if err != nil {
 		return err
 	}
@@ -83,6 +87,31 @@ func handlerRegister(s *state, cmd command) error {
 	}
 	fmt.Printf("user created: %s\n", name)
 	log.Printf("created user: %+v\n", user)
+	return nil
+}
+
+func handlerReset(s *state, cmd command) error {
+	ctx := context.Background()
+	if err := s.db.DeleteUsers(ctx); err != nil {
+		return err
+	}
+	fmt.Println("database reset")
+	return nil
+}
+
+func handlerUsers(s *state, cmd command) error {
+	ctx := context.Background()
+	users, err := s.db.GetUsers(ctx)
+	if err != nil {
+		return err
+	}
+	for _, user := range users {
+		if user.Name == s.cfg.CurrentUserName {
+			fmt.Printf("* %s (current)\n", user.Name)
+			continue
+		}
+		fmt.Printf("* %s\n", user.Name)
+	}
 	return nil
 }
 
@@ -108,6 +137,8 @@ func main() {
 	cmds := &commands{handlers: make(map[string]func(*state, command) error)}
 	cmds.register("login", handlerLogin)
 	cmds.register("register", handlerRegister)
+	cmds.register("reset", handlerReset)
+	cmds.register("users", handlerUsers)
 
 	if len(os.Args) < 2 {
 		fmt.Fprintln(os.Stderr, "not enough arguments were provided")
