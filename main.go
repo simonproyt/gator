@@ -10,6 +10,8 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"gator/internal/config"
@@ -289,12 +291,62 @@ func fetchFeed(ctx context.Context, feedURL string) (*RSSFeed, error) {
 }
 
 func handlerAgg(s *state, cmd command) error {
-	ctx := context.Background()
-	feed, err := fetchFeed(ctx, "https://www.wagslane.dev/index.xml")
+	if len(cmd.args) < 1 {
+		return fmt.Errorf("time_between_reqs required")
+	}
+	d, err := time.ParseDuration(cmd.args[0])
 	if err != nil {
 		return err
 	}
-	fmt.Printf("%+v\n", feed)
+	fmt.Printf("Collecting feeds every %s\n", d)
+
+	scrapeOnce := func() {
+		if err := scrapeFeeds(s); err != nil {
+			log.Printf("scrape error: %v", err)
+		}
+	}
+
+	// run immediately
+	scrapeOnce()
+
+	ticker := time.NewTicker(d)
+	defer ticker.Stop()
+
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+
+	for {
+		select {
+		case <-sig:
+			fmt.Println("stopping aggregator")
+			return nil
+		case <-ticker.C:
+			scrapeOnce()
+		}
+	}
+}
+
+func scrapeFeeds(s *state) error {
+	ctx := context.Background()
+	feed, err := s.db.GetNextFeedToFetch(ctx)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil
+		}
+		return err
+	}
+	if err := s.db.MarkFeedFetched(ctx, feed.ID); err != nil {
+		return err
+	}
+	rss, err := fetchFeed(ctx, feed.Url)
+	if err != nil {
+		log.Printf("fetch error for %s: %v", feed.Url, err)
+		return nil
+	}
+	fmt.Printf("Feed: %s (%s)\n", feed.Name, feed.Url)
+	for _, item := range rss.Channel.Item {
+		fmt.Printf("- %s\n", item.Title)
+	}
 	return nil
 }
 

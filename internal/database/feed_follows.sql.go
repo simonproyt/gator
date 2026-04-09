@@ -81,9 +81,18 @@ const getFeedByURLForFollow = `-- name: GetFeedByURLForFollow :one
 SELECT id, created_at, updated_at, name, url, user_id FROM feeds WHERE url = $1
 `
 
-func (q *Queries) GetFeedByURLForFollow(ctx context.Context, url string) (Feed, error) {
+type GetFeedByURLForFollowRow struct {
+	ID        uuid.UUID
+	CreatedAt time.Time
+	UpdatedAt time.Time
+	Name      string
+	Url       string
+	UserID    uuid.NullUUID
+}
+
+func (q *Queries) GetFeedByURLForFollow(ctx context.Context, url string) (GetFeedByURLForFollowRow, error) {
 	row := q.db.QueryRowContext(ctx, getFeedByURLForFollow, url)
-	var i Feed
+	var i GetFeedByURLForFollowRow
 	err := row.Scan(
 		&i.ID,
 		&i.CreatedAt,
