@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -18,7 +19,7 @@ import (
 	"gator/internal/database"
 
 	"github.com/google/uuid"
-	_ "github.com/lib/pq"
+	pq "github.com/lib/pq"
 )
 
 type state struct {
@@ -204,6 +205,36 @@ func handlerFeedsList(s *state, cmd command) error {
 	return nil
 }
 
+func handlerBrowse(s *state, cmd command, user database.User) error {
+	limit := 2
+	if len(cmd.args) > 0 {
+		if v, err := strconv.Atoi(cmd.args[0]); err == nil && v > 0 {
+			limit = v
+		}
+	}
+	ctx := context.Background()
+	rows, err := s.db.GetPostsForUser(ctx, database.GetPostsForUserParams{UserID: user.ID, Limit: int32(limit)})
+	if err != nil {
+		return err
+	}
+	for _, r := range rows {
+		title := ""
+		if r.Title.Valid {
+			title = r.Title.String
+		}
+		pub := ""
+		if r.PublishedAt.Valid {
+			pub = r.PublishedAt.Time.Format(time.RFC3339)
+		}
+		fmt.Printf("* %s - %s (%s)\n", r.FeedName, title, pub)
+		fmt.Printf("  %s\n", r.Url)
+		if r.Description.Valid {
+			fmt.Printf("  %s\n", r.Description.String)
+		}
+	}
+	return nil
+}
+
 func handlerFollow(s *state, cmd command, user database.User) error {
 	if len(cmd.args) == 0 {
 		return fmt.Errorf("url required")
@@ -344,10 +375,67 @@ func scrapeFeeds(s *state) error {
 		return nil
 	}
 	fmt.Printf("Feed: %s (%s)\n", feed.Name, feed.Url)
+	now := time.Now().UTC()
 	for _, item := range rss.Channel.Item {
-		fmt.Printf("- %s\n", item.Title)
+		// parse published date
+		var pub sql.NullTime
+		if item.PubDate != "" {
+			if t, err := parsePubDate(item.PubDate); err == nil {
+				pub = sql.NullTime{Time: t, Valid: true}
+			}
+		}
+
+		var title sql.NullString
+		if item.Title != "" {
+			title = sql.NullString{String: item.Title, Valid: true}
+		}
+		var desc sql.NullString
+		if item.Description != "" {
+			desc = sql.NullString{String: item.Description, Valid: true}
+		}
+
+		_, err := s.db.CreatePost(ctx, database.CreatePostParams{
+			ID:          uuid.New(),
+			CreatedAt:   now,
+			UpdatedAt:   now,
+			Title:       title,
+			Url:         item.Link,
+			Description: desc,
+			PublishedAt: pub,
+			FeedID:      feed.ID,
+		})
+		if err != nil {
+			if pgErr, ok := err.(*pq.Error); ok {
+				if pgErr.Code == "23505" {
+					// duplicate key, ignore
+					continue
+				}
+			}
+			log.Printf("create post error: %v", err)
+		}
 	}
 	return nil
+}
+
+func parsePubDate(s string) (time.Time, error) {
+	layouts := []string{
+		time.RFC1123Z,
+		time.RFC1123,
+		time.RFC822Z,
+		time.RFC822,
+		time.RFC850,
+		time.RFC3339,
+		time.RFC3339Nano,
+	}
+	var lastErr error
+	for _, l := range layouts {
+		if t, err := time.Parse(l, s); err == nil {
+			return t, nil
+		} else {
+			lastErr = err
+		}
+	}
+	return time.Time{}, lastErr
 }
 
 func main() {
@@ -380,6 +468,7 @@ func main() {
 	cmds.register("follow", middlewareLoggedIn(handlerFollow))
 	cmds.register("following", middlewareLoggedIn(handlerFollowing))
 	cmds.register("unfollow", middlewareLoggedIn(handlerUnfollow))
+	cmds.register("browse", middlewareLoggedIn(handlerBrowse))
 
 	if len(os.Args) < 2 {
 		fmt.Fprintln(os.Stderr, "not enough arguments were provided")
