@@ -3,8 +3,12 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/xml"
 	"fmt"
+	"html"
+	"io"
 	"log"
+	"net/http"
 	"os"
 	"time"
 
@@ -27,6 +31,22 @@ type command struct {
 
 type commands struct {
 	handlers map[string]func(*state, command) error
+}
+
+type RSSItem struct {
+	Title       string `xml:"title"`
+	Link        string `xml:"link"`
+	Description string `xml:"description"`
+	PubDate     string `xml:"pubDate"`
+}
+
+type RSSFeed struct {
+	Channel struct {
+		Title       string    `xml:"title"`
+		Link        string    `xml:"link"`
+		Description string    `xml:"description"`
+		Item        []RSSItem `xml:"item"`
+	} `xml:"channel"`
 }
 
 func (c *commands) register(name string, f func(*state, command) error) {
@@ -115,6 +135,48 @@ func handlerUsers(s *state, cmd command) error {
 	return nil
 }
 
+func fetchFeed(ctx context.Context, feedURL string) (*RSSFeed, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", feedURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "gator")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("bad status: %s", resp.Status)
+	}
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	var feed RSSFeed
+	if err := xml.Unmarshal(b, &feed); err != nil {
+		return nil, err
+	}
+	// Unescape HTML entities for titles and descriptions
+	feed.Channel.Title = html.UnescapeString(feed.Channel.Title)
+	feed.Channel.Description = html.UnescapeString(feed.Channel.Description)
+	for i := range feed.Channel.Item {
+		feed.Channel.Item[i].Title = html.UnescapeString(feed.Channel.Item[i].Title)
+		feed.Channel.Item[i].Description = html.UnescapeString(feed.Channel.Item[i].Description)
+	}
+	return &feed, nil
+}
+
+func handlerAgg(s *state, cmd command) error {
+	ctx := context.Background()
+	feed, err := fetchFeed(ctx, "https://www.wagslane.dev/index.xml")
+	if err != nil {
+		return err
+	}
+	fmt.Printf("%+v\n", feed)
+	return nil
+}
+
 func main() {
 	cfg, err := config.Read()
 	if err != nil {
@@ -139,6 +201,7 @@ func main() {
 	cmds.register("register", handlerRegister)
 	cmds.register("reset", handlerReset)
 	cmds.register("users", handlerUsers)
+	cmds.register("agg", handlerAgg)
 
 	if len(os.Args) < 2 {
 		fmt.Fprintln(os.Stderr, "not enough arguments were provided")
